@@ -1,6 +1,6 @@
 python-telegram-bot==20.3
 fastapi
 nest_asyncio
-uvicorn
+gtts
 google-generativeai
-gTTS
+uvicorn
