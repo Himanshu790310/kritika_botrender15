@@ -1,3 +1,6 @@
 python-telegram-bot==20.3
+fastapi
+nest_asyncio
+uvicorn
 google-generativeai
 gTTS
