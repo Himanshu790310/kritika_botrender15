@@ -1,31 +1,39 @@
 import os
 import re
 import asyncio
-import logging
+import nest_asyncio
 from gtts import gTTS
+from fastapi import FastAPI
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+)
 import google.generativeai as genai
 
-# STEP 3: Logging and event loop patch
-logging.basicConfig(level=logging.INFO)
+# Enable nested async (for running in notebooks or certain servers)
+nest_asyncio.apply()
 
-try:
-    import nest_asyncio
-    nest_asyncio.apply()
-except:
-    pass  # Not needed outside Colab
+# Load credentials from environment
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "6138277581"))
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# STEP 4: Configuration
-BOT_TOKEN = "7988273088:AAGhxSxjCK0H1qg51tEaf4WviU9hSF1dmfc"  # Replace with your bot token
-ADMIN_ID = 6138277581                                          # Your Telegram ID
-GEMINI_API_KEY = "AIzaSyDc6wrTkV2k4AWl72NZxET6URrXCbM8haM"      # Replace with your Gemini key
-
-# STEP 5: Gemini Setup
+# Setup Gemini
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash-latest")
+model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
-# STEP 6: Kritika prompt logic
+# FastAPI app
+app = FastAPI()
+
+@app.get("/")
+def root():
+    return {"message": "Kritika is running 💬"}
+
+# 🎯 Prompt function
 def kritika_prompt(user_input: str) -> str:
     return f"""
 You are Kritika, a warm, polite, culturally-aware AI English teacher for Hindi-speaking students.
@@ -49,7 +57,7 @@ End your answer with:
 "Aur koi doubt hai?" or "Main aur madad kar sakti hoon?"
 """
 
-# STEP 7: Get response from Gemini
+# 💬 Get Gemini response
 def get_kritika_reply(doubt: str) -> str:
     prompt = kritika_prompt(doubt)
     try:
@@ -58,52 +66,50 @@ def get_kritika_reply(doubt: str) -> str:
     except Exception:
         return "Kritika thoda busy hai abhi. Thodi der baad try kariye. 🙏"
 
-# STEP 8: Clean markdown for gTTS
+# 🗣️ Clean audio text and create voice
 def clean_text(text):
     return re.sub(r"[*_~`#>\[\]()\-]", "", text)
 
 def generate_voice(text, filename="kritika_reply.mp3"):
-    cleaned_text = clean_text(text)
-    tts = gTTS(cleaned_text, lang="hi")
+    cleaned = clean_text(text)
+    tts = gTTS(cleaned, lang="hi")
     tts.save(filename)
     return filename
 
-# STEP 9: /ask handler
-async def ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    doubt = ' '.join(context.args).strip()
+# 📥 Start command
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "👋 Namaste! Main Kritika hoon — aapki English teacher. 💬\n"
+        "Aap direct apna doubt bhej sakte ho, bina kisi command ke.\n"
+        "Jaise:\n- \"Present perfect tense kya hota hai?\"\n- \"Mujhe translation ka rule samjhao\"\n\n"
+        "Shuru karein? 😊"
+    )
+
+# 💬 Any message = doubt
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    doubt = update.message.text.strip()
     user_id = update.effective_user.id
-    user_name = update.effective_user.full_name
+    name = update.effective_user.full_name
 
     if not doubt:
-        await update.message.reply_text("❓ /ask ke baad apna doubt likhiye.\nJaise: /ask Present perfect tense samjhao")
         return
 
-    await update.message.reply_text("🧠 Kritika soch rahi hai... thoda sa wait kariye...")
+    await update.message.reply_text("🧠 Kritika soch rahi hai...")
 
     reply = get_kritika_reply(doubt)
     audio_path = generate_voice(reply)
 
-    # Send response to student
     await context.bot.send_message(chat_id=update.effective_chat.id, text=f"👩🏻‍🏫 Kritika:\n{reply}")
     await context.bot.send_audio(chat_id=update.effective_chat.id, audio=open(audio_path, "rb"))
 
-    # Send copy to admin
-    admin_message = (
-        f"📩 New doubt received by Kritika:\n"
-        f"👤 From: {user_name} (ID: {user_id})\n"
-        f"❓ Doubt: {doubt}\n\n"
-        f"📘 Kritika's Response:\n{reply}"
-    )
-    await context.bot.send_message(chat_id=ADMIN_ID, text=admin_message)
+    await context.bot.send_message(chat_id=ADMIN_ID, text=f"📩 New doubt from {name} (ID: {user_id}):\n❓ {doubt}\n📘 {reply}")
 
-# STEP 10: Main bot runner
-async def main():
-    app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("ask", ask))
+# 🔁 Run on startup
+@app.on_event("startup")
+async def start_bot():
+    application = Application.builder().token(BOT_TOKEN).build()
 
-    print("✅ Kritika is now live with Gemini 1.5 Flash and audio replies!")
-    await app.run_polling()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# STEP 11: Launch bot
-if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.create_task(application.run_polling())
